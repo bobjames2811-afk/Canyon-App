@@ -499,6 +499,19 @@ sb.auth.onAuthStateChange((event, session) => {
 
 async function checkUser() {
   setLoadingMsg('Checking session...');
+  // Handle OAuth redirect code
+  const params = new URLSearchParams(window.location.search);
+  if (params.has('code')) {
+    const { data, error } = await sb.auth.exchangeCodeForSession(window.location.search);
+    if (data?.session) {
+      user = data.session.user;
+      setupUserUI();
+      window.history.replaceState({}, document.title, window.location.pathname);
+      showScreen('appScreen');
+      loadData();
+      return;
+    }
+  }
   const { data: { session } } = await sb.auth.getSession().catch(() => ({data:{session:null}}));
   if (session) {
     user = session.user;
