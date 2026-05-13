@@ -399,11 +399,12 @@ body{font-family:var(--font);font-size:var(--fs);background:var(--bg);color:var(
 
 </div>
 <script>
-// ── Supabase ──────────────────────────────────────────────────────────────
+// ── Supabase (implicit flow — works on static sites with no server) ────────
 const {createClient} = supabase;
 const sb = createClient(
   'https://rnkbunljgwaadaftpwgs.supabase.co',
-  'sb_publishable_VcsgfVuhpqixEzW4dJGgyA_XYtjebBL'
+  'sb_publishable_VcsgfVuhpqixEzW4dJGgyA_XYtjebBL',
+  { auth: { flowType: 'implicit' } }
 );
 
 const CANYON_CHATS = [
@@ -414,54 +415,31 @@ const CANYON_CHATS = [
 const DATA_URL = 'https://mryike.github.io/canyon-tracker/data.json';
 const CANYON_ORDER = ['Empress', 'Grand Canyon', 'Narrow Neck'];
 
-let user = null;
-let allData = {};
-let canyon = 'Empress';
+let user = null, allData = {}, canyon = 'Empress';
 let dateStr = '', dateList = [];
 let calY = new Date().getFullYear(), calM = new Date().getMonth(), calSel = '';
 let currentConversation = null, messageSubscription = null;
 
-// ── AUTH FIX ──────────────────────────────────────────────────────────────
-// THE KEY CHANGES:
-// 1. redirectTo uses window.location.origin + pathname — matches whatever domain
-//    the app is currently running on (production OR any Vercel preview URL).
-// 2. prompt: 'select_account' forces Google to always show the account picker,
-//    avoiding silent failures for users who aren't the primary Google account.
-// 3. onAuthStateChange handles the session automatically after the redirect
-//    returns — no manual token parsing needed.
-//
-// REQUIRED SUPABASE DASHBOARD STEP (do this once):
-//   Authentication → URL Configuration
-//   • Site URL: https://your-production-domain.vercel.app
-//   • Add to Redirect URLs: https://*.vercel.app/**
-//   That wildcard covers every preview deployment automatically.
-
+// ── Auth ──────────────────────────────────────────────────────────────────
 async function signInGoogle() {
   const btn = document.getElementById('googleBtn');
   const errEl = document.getElementById('loginError');
   btn.disabled = true;
-  btn.textContent = 'Redirecting to Google...';
+  btn.innerHTML = 'Redirecting to Google...';
   errEl.style.display = 'none';
-
   const { error } = await sb.auth.signInWithOAuth({
     provider: 'google',
     options: {
-      // Use the current URL so this works on any deployment domain
-      redirectTo: window.location.origin + window.location.pathname,
-      queryParams: {
-        // Always show account picker — prevents silent failures for other accounts
-        prompt: 'select_account'
-      }
+      redirectTo: window.location.href.split('?')[0].split('#')[0],
+      queryParams: { prompt: 'select_account' }
     }
   });
-
   if (error) {
     errEl.textContent = 'Sign-in failed: ' + error.message;
     errEl.style.display = 'block';
     btn.disabled = false;
     btn.innerHTML = googleBtnInner();
   }
-  // No else needed — on success the browser redirects to Google immediately
 }
 
 function googleBtnInner() {
@@ -475,19 +453,14 @@ async function signOut() {
   showScreen('loginScreen');
 }
 
-// ── Session init ──────────────────────────────────────────────────────────
-// onAuthStateChange fires automatically when Supabase processes the OAuth
-// callback redirect — we don't need to manually parse the URL hash/params.
+// onAuthStateChange handles the token from the URL hash automatically
+// in implicit flow — no manual parsing needed
 sb.auth.onAuthStateChange((event, session) => {
   if (event === 'SIGNED_IN' && session) {
     user = session.user;
     setupUserUI();
-    // Clean up the OAuth callback params from the URL
-    if (window.location.search.includes('code=') || window.location.hash.includes('access_token')) {
-      window.history.replaceState({}, document.title, window.location.pathname);
-    }
-    const appVisible = document.getElementById('appScreen').classList.contains('active');
-    if (!appVisible) {
+    window.history.replaceState({}, document.title, window.location.pathname);
+    if (!document.getElementById('appScreen').classList.contains('active')) {
       showScreen('appScreen');
       loadData();
     }
@@ -499,28 +472,18 @@ sb.auth.onAuthStateChange((event, session) => {
 
 async function checkUser() {
   setLoadingMsg('Checking session...');
-  // Handle OAuth redirect code
-  const params = new URLSearchParams(window.location.search);
-  if (params.has('code')) {
-    const { data, error } = await sb.auth.exchangeCodeForSession(window.location.search);
-    if (data?.session) {
-      user = data.session.user;
-      setupUserUI();
-      window.history.replaceState({}, document.title, window.location.pathname);
-      showScreen('appScreen');
-      loadData();
-      return;
-    }
-  }
+  // Small delay so onAuthStateChange can fire first if returning from OAuth
+  await new Promise(r => setTimeout(r, 300));
   const { data: { session } } = await sb.auth.getSession().catch(() => ({data:{session:null}}));
   if (session) {
     user = session.user;
     setupUserUI();
     showScreen('appScreen');
     loadData();
-  } else {
+  } else if (!window.location.hash.includes('access_token') && !window.location.hash.includes('error')) {
     showScreen('loginScreen');
   }
+  // If hash has access_token, onAuthStateChange will handle it
 }
 
 function setupUserUI() {
@@ -538,7 +501,6 @@ function setLoadingMsg(m) { document.getElementById('loadingMsg').textContent = 
 function showScreen(id) {
   document.querySelectorAll('.app>.screen').forEach(s=>s.classList.remove('active'));
   document.getElementById(id).classList.add('active');
-  // When showing the main app, ensure the active tab is visible
   if (id === 'appScreen') {
     const activeTab = document.querySelector('#appScreen>.screen.active');
     if (!activeTab) document.getElementById('homeTab').classList.add('active');
@@ -613,7 +575,7 @@ function selCanyon(c) {
   document.querySelectorAll('.filter-dd').forEach(d=>d.classList.remove('open'));
   dateList=getDateListForCanyon(canyon);
   if(!dateList.includes(dateStr)) dateStr=dateList[0]||todayStr();
-  populateDates();populateCanyons();renderHome();renderCal();
+  populateDates();populateCanyons();renderHome();renderCalGrid();
 }
 function selDate(d) {
   dateStr=d;
